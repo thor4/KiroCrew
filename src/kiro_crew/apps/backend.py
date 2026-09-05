@@ -39,6 +39,7 @@ from kiro_crew.loopback_http import loopback_urlopen
 from kiro_crew.sandbox import (
     RLIMIT_PROFILE_BUILD,
     RLIMIT_PROFILE_TOOL,
+    app_backend_visible_targets,
     cgroup_scope_argv,
     popen_limited,
     run_limited,
@@ -1133,11 +1134,18 @@ def _start_app_backend_body(app_name: str, manifest) -> AppProcess | None:
     # control available. What still bounds a forged cache there is provenance rather than
     # permissions: with ``require_policy_signature`` set in the admission policy, a document
     # nobody trusted is refused however it got onto disk.
-    _visible: tuple[str, ...] = ()
-    if _platform_extra.get(POLICY_CACHE_ONLY_ENV):
-        _visible = (str(policy_cache_dir()),)
+    # The app's OWN hidden state leaves (e.g. md-notebook's vault registry, PAT, and
+    # sync settings) are unmasked for exactly this spawn: the mask fences agent
+    # subprocesses, but this backend is each leaf's only legitimate reader/writer, and
+    # leaving the mask on breaks the app outright (#8762). Unlike the governance cache
+    # these are the app's own read-write state, so the blanket "visible" meaning is the
+    # correct one. Empty for every app without declared owned leaves.
+    _cache_visible = bool(_platform_extra.get(POLICY_CACHE_ONLY_ENV))
+    _visible: tuple[str, ...] = app_backend_visible_targets(app_name)
+    if _cache_visible:
+        _visible = _visible + (str(policy_cache_dir()),)
     sandboxed_cmd, cleanup_path = wrap_argv(cmd, mode="standard", extra_visible_dirs=_visible)
-    if _visible and list(sandboxed_cmd) == list(cmd):
+    if _cache_visible and list(sandboxed_cmd) == list(cmd):
         # The wrap was a no-op, so this host has no OS confinement at all: no sandbox backend,
         # or agent.sandbox='off' with the sandbox_allow_no_isolation opt-in. Said once,
         # because the combination is worth naming — a centrally governed host running app code
